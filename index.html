@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>METRO COMMAND CENTER // FULLSCREEN DUAL-TRACK HUD</title>
+  <style>
+    :root {
+      --bg-dark: #05070d;
+      --cyan-glow: #00f0ff;
+      --cyan-dim: rgba(0, 240, 255, 0.25);
+      --red-glow: #ff0055;
+      --red-dim: rgba(255, 0, 85, 0.25);
+      --yellow-glow: #facc15;
+      --text-bright: #f8fafc;
+      --panel-bg: rgba(10, 15, 26, 0.82);
+      --border-cyan: rgba(0, 240, 255, 0.4);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      font-family: 'Consolas', 'Courier New', monospace;
+    }
+
+    body, html {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: var(--bg-dark);
+      color: var(--text-bright);
+    }
+
+    /* FULLSCREEN CANVAS */
+    #metro-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+      display: block;
+    }
+
+    /* HUD OVERLAY GRID LAYOUT */
+    .hud-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 10;
+      pointer-events: none; /* Let canvas capture clicks underneath where panels aren't */
+      display: grid;
+      grid-template-columns: 340px 1fr 360px;
+      grid-template-rows: 60px 1fr 180px;
+      grid-template-areas:
+        "header header header"
+        "telemetry main-space station-panel"
+        "footer main-space controls";
+      padding: 16px;
+      gap: 16px;
+    }
+
+    .interactive-panel {
+      pointer-events: auto;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-cyan);
+      box-shadow: 0 0 15px rgba(0, 240, 255, 0.15), inset 0 0 15px rgba(0, 240, 255, 0.05);
+      backdrop-filter: blur(8px);
+      border-radius: 4px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .panel-corner-accents::before,
+    .panel-corner-accents::after {
+      content: '';
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-color: var(--cyan-glow);
+      border-style: solid;
+      pointer-events: none;
+    }
+    .panel-corner-accents::before { top: 0; left: 0; border-width: 2px 0 0 2px; }
+    .panel-corner-accents::after { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
+
+    /* HEADER */
+    header {
+      grid-area: header;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 20px;
+      background: rgba(8, 12, 22, 0.9);
+    }
+
+    .logo-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      background: var(--cyan-glow);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--cyan-glow);
+      animation: pulse 1.5s infinite alternate;
+    }
+
+    @keyframes pulse {
+      from { opacity: 0.4; transform: scale(0.9); }
+      to { opacity: 1; transform: scale(1.2); }
+    }
+
+    h1 {
+      font-size: 1.25rem;
+      letter-spacing: 3px;
+      color: var(--cyan-glow);
+      text-shadow: 0 0 10px var(--cyan-dim);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 0.9rem;
+    }
+
+    /* LEFT TELEMETRY PANEL */
+    .telemetry-panel {
+      grid-area: telemetry;
+      padding: 14px;
+      gap: 12px;
+    }
+
+    .panel-header {
+      font-size: 0.85rem;
+      color: var(--cyan-glow);
+      border-bottom: 1px solid var(--border-cyan);
+      padding-bottom: 6px;
+      margin-bottom: 8px;
+      letter-spacing: 2px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .telemetry-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+
+    .telemetry-card {
+      background: rgba(0, 240, 255, 0.05);
+      border-left: 3px solid var(--cyan-glow);
+      padding: 8px 10px;
+      font-size: 0.8rem;
+    }
+
+    .telemetry-card.red-line {
+      border-left-color: var(--red-glow);
+      background: rgba(255, 0, 85, 0.05);
+    }
+
+    .telemetry-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+
+    .val-highlight {
+      color: var(--yellow-glow);
+      font-weight: bold;
+    }
+
+    /* RIGHT STATION METADATA PANEL */
+    .station-panel {
+      grid-area: station-panel;
+      padding: 14px;
+    }
+
+    .station-details {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 0.85rem;
+    }
+
+    .detail-box {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 10px;
+      border-radius: 4px;
+    }
+
+    /* CONTROLS PANEL */
+    .controls-panel {
+      grid-area: controls;
+      padding: 14px;
+      gap: 10px;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.8rem;
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--cyan-glow);
+    }
+
+    .btn {
+      background: rgba(0, 240, 255, 0.15);
+      border: 1px solid var(--cyan-glow);
+      color: var(--cyan-glow);
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 3px;
+      letter-spacing: 1px;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      background: var(--cyan-glow);
+      color: #000;
+      box-shadow: 0 0 12px var(--cyan-glow);
+    }
+
+    .btn-emergency {
+      background: rgba(255, 0, 85, 0.2);
+      border-color: var(--red-glow);
+      color: var(--red-glow);
+      width: 100%;
+      margin-top: 4px;
+    }
+
+    .btn-emergency:hover {
+      background: var(--red-glow);
+      color: #fff;
+      box-shadow: 0 0 15px var(--red-glow);
+    }
+
+    /* FOOTER / SYSTEM LOGS */
+    .footer-panel {
+      grid-area: footer;
+      padding: 10px 14px;
+      font-size: 0.75rem;
+    }
+
+    .log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      height: 100px;
+      overflow-y: hidden;
+      color: #94a3b8;
+    }
+
+    .log-item.alert { color: var(--red-glow); }
+    .log-item.info { color: var(--cyan-glow); }
+
+    /* EMERGENCY OVERLAY FLASH */
+    #emergency-flash {
+      position: absolute;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(255, 0, 85, 0.25);
+      pointer-events: none;
+      z-index: 100;
+      opacity: 0;
+      transition: opacity 0.15s ease-in-out;
+      border: 10px solid var(--red-glow);
+    }
+
+    body.emergency-active #emergency-flash {
+      opacity: 1;
+      animation: flashStrobe 0.4s infinite alternate;
+    }
+
+    @keyframes flashStrobe {
+      from { opacity: 0.2; }
+      to { opacity: 0.8; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- FULLSCREEN CANVAS -->
+  <canvas id="metro-canvas"></canvas>
+
+  <div id="emergency-flash"></div>
+
+  <!-- HUD OVERLAY LAYER -->
+  <div class="hud-layer">
+    
+    <!-- HEADER -->
+    <header class="interactive-panel panel-corner-accents">
+      <div class="logo-title">
+        <div class="status-dot" id="sys-status-dot"></div>
+        <h1>TACTICAL METRO COMMAND // DUAL-TRACK MONITOR</h1>
+      </div>
+      <div class="header-right">
+        <div>SYS STATUS: <span id="status-text" style="color: var(--cyan-glow);">OPTIMAL</span></div>
+        <div style="font-size: 1.1rem; color: var(--yellow-glow); font-weight: bold;" id="clock-display">00:00:00</div>
+      </div>
+    </header>
+
+    <!-- LEFT TELEMETRY -->
+    <div class="telemetry-panel interactive-panel panel-corner-accents">
+      <div class="panel-header">
+        <span>LIVE TELEMETRY</span>
+        <span style="color: var(--yellow-glow);">TRAINS [8]</span>
+      </div>
+      <div class="telemetry-list" id="telemetry-container">
+        <!-- Dynamically Populated -->
+      </div>
+    </div>
+
+    <!-- RIGHT STATION METADATA -->
+    <div class="station-panel interactive-panel panel-corner-accents">
+      <div class="panel-header">STATION INSPECTOR</div>
+      <div class="station-details" id="station-detail-content">
+        <div style="color: #64748b; text-align: center; margin-top: 20px;">
+          Hover or click on a station node to inspect real-time platform telemetry.
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM FOOTER SYSTEM LOGS -->
+    <div class="footer-panel interactive-panel panel-corner-accents">
+      <div class="panel-header">TACTICAL SYSTEM LOGS</div>
+      <div class="log-list" id="sys-logs">
+        <div class="log-item info">[10:55:00] Dual-track signal grid online.</div>
+        <div class="log-item">[10:55:04] ATO Automatic Train Operation active.</div>
+      </div>
+    </div>
+
+    <!-- BOTTOM CONTROLS -->
+    <div class="controls-panel interactive-panel panel-corner-accents">
+      <div class="panel-header">COMMAND OVERRIDES</div>
+      <div class="control-row">
+        <span>GLOBAL VELOCITY:</span>
+        <input type="range" id="speed-slider" min="0.2" max="3" step="0.1" value="1">
+      </div>
+      <div class="control-row">
+        <button class="btn" style="width: 100%;" onclick="dispatchTrain()">DISPATCH EXTRA TRAIN</button>
+      </div>
+      <button class="btn btn-emergency" onclick="toggleEmergencyStop()">🚨 EMERGENCY STOP (DEFCON-1)</button>
+    </div>
+
+  </div>
+
+  <script>
+    // =========================================================
+    // 1. CANVAS SETUP & WINDOW RESIZING
+    // =========================================================
+    const canvas = document.getElementById('metro-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let width, height;
+    function resizeCanvas() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // =========================================================
+    // 2. CLOCK & LOG SYSTEM
+    // =========================================================
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('clock-display').innerText = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0').substring(0, 2);
+    }
+    setInterval(updateClock, 50);
+
+    function addLog(msg, type = '') {
+      const logs = document.getElementById('sys-logs');
+      const time = new Date().toTimeString().split(' ')[0];
+      const div = document.createElement('div');
+      div.className = `log-item ${type}`;
+      div.innerText = `[${time}] ${msg}`;
+      logs.prepend(div);
+      if (logs.children.length > 8) logs.removeChild(logs.lastChild);
+    }
+
+    // =========================================================
+    // 3. BEZIER GEOMETRY & PARALLEL DUAL-TRACK MATH
+    // =========================================================
+    // Evaluates point along cubic bezier
+    function getBezierPoint(p0, p1, p2, p3, t) {
+      const cx = 3 * (p1.x - p0.x), bx = 3 * (p2.x - p1.x) - cx, ax = p3.x - p0.x - cx - bx;
+      const cy = 3 * (p1.y - p0.y), by = 3 * (p2.y - p1.y) - cy, ay = p3.y - p0.y - cy - by;
+      return {
+        x: ax * Math.pow(t, 3) + bx * Math.pow(t, 2) + cx * t + p0.x,
+        y: ay * Math.pow(t, 3) + by * Math.pow(t, 2) + cy * t + p0.y
+      };
+    }
+
+    // Evaluates tangent vector along bezier for offset calculation
+    function getBezierTangent(p0, p1, p2, p3, t) {
+      const dx = 3 * Math.pow(1 - t, 2) * (p1.x - p0.x) + 6 * (1 - t) * t * (p2.x - p1.x) + 3 * Math.pow(t, 2) * (p3.x - p0.x);
+      const dy = 3 * Math.pow(1 - t, 2) * (p1.y - p0.y) + 6 * (1 - t) * t * (p2.y - p1.y) + 3 * Math.pow(t, 2) * (p3.y - p0.y);
+      const len = Math.hypot(dx, dy);
+      return { x: dx / len, y: dy / len, nx: -dy / len, ny: dx / len };
+    }
+
+    // Offset point perpendicular to curve for double tracks
+    function getOffsetBezierPoint(p0, p1, p2, p3, t, offset) {
+      const pt = getBezierPoint(p0, p1, p2, p3, t);
+      const tang = getBezierTangent(p0, p1, p2, p3, t);
+      return {
+        x: pt.x + tang.nx * offset,
+        y: pt.y + tang.ny * offset,
+        tangent: tang
+      };
+    }
+
+    // Lines configuration (Red and Blue Curves across screen)
+    function getLineConfigs() {
+      return {
+        red: {
+          color: '#ff0055',
+          dimColor: 'rgba(255, 0, 85, 0.3)',
+          p0: { x: width * 0.1, y: height * 0.2 },
+          p1: { x: width * 0.4, y: height * 0.15 },
+          p2: { x: width * 0.6, y: height * 0.85 },
+          p3: { x: width * 0.9, y: height * 0.8 },
+          stations: [
+            { code: 'R01', name: 'NORTH TERMINAL', t: 0.1, transfer: false, density: 'LOW', densityVal: 24 },
+            { code: 'R02', name: 'CENTRAL PARK', t: 0.35, transfer: false, density: 'MEDIUM', densityVal: 58 },
+            { code: 'R03', name: 'GRAND HUB', t: 0.58, transfer: true, density: 'CRITICAL', densityVal: 92 },
+            { code: 'R04', name: 'SOUTH HARBOR', t: 0.88, transfer: false, density: 'LOW', densityVal: 31 }
+          ]
+        },
+        blue: {
+          color: '#00f0ff',
+          dimColor: 'rgba(0, 240, 255, 0.3)',
+          p0: { x: width * 0.1, y: height * 0.75 },
+          p1: { x: width * 0.45, y: height * 0.85 },
+          p2: { x: width * 0.52, y: height * 0.2 },
+          p3: { x: width * 0.9, y: height * 0.25 },
+          stations: [
+            { code: 'B01', name: 'WEST TECH', t: 0.12, transfer: false, density: 'MEDIUM', densityVal: 48 },
+            { code: 'B02', name: 'MIDTOWN', t: 0.38, transfer: false, density: 'HIGH', densityVal: 76 },
+            { code: 'B03', name: 'GRAND HUB', t: 0.58, transfer: true, density: 'CRITICAL', densityVal: 92 },
+            { code: 'B04', name: 'EAST GATE', t: 0.85, transfer: false, density: 'LOW', densityVal: 19 }
+          ]
+        }
+      };
+    }
+
+    // =========================================================
+    // 4. TRAINS STATE & TRAFFIC SIMULATION
+    // =========================================================
+    let trains = [
+      // Red Line: Inbound & Outbound
+      { id: 'TR-101', line: 'red', track: 'inbound', t: 0.15, speed: 0.0008, passengers: 340, status: 'ON TIME' },
+      { id: 'TR-102', line: 'red', track: 'outbound', t: 0.85, speed: -0.0007, passengers: 210, status: 'ON TIME' },
+      { id: 'TR-103', line: 'red', track: 'inbound', t: 0.6, speed: 0.0009, passengers: 420, status: 'ON TIME' },
+      
+      // Blue Line: Inbound & Outbound
+      { id: 'TB-201', line: 'blue', track: 'inbound', t: 0.2, speed: 0.0007, passengers: 180, status: 'ON TIME' },
+      { id: 'TB-202', line: 'blue', track: 'outbound', t: 0.7, speed: -0.0008, passengers: 290, status: 'ON TIME' },
+      { id: 'TB-203', line: 'blue', track: 'inbound', t: 0.9, speed: 0.0006, passengers: 150, status: 'ON TIME' }
+    ];
+
+    let isEmergency = false;
+    let globalSpeedMultiplier = 1.0;
+    let hoveredStation = null;
+    let selectedStation = null;
+
+    // =========================================================
+    // 5. MAIN CANVAS RENDER ENGINE
+    // =========================================================
+    function drawGrid() {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0, 240, 255, 0.04)';
+      ctx.lineWidth = 1;
+      const gridSize = 40;
+      for (let x = 0; x < width; x += gridSize) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+      }
+      for (let y = 0; y < height; y += gridSize) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function renderCanvas() {
+      ctx.clearRect(0, 0, width, height);
+      drawGrid();
+
+      const lines = getLineConfigs();
+      const trackGap = 12; // Gap between parallel tracks
+
+      // DRAW DUAL TRACKS & STATIONS
+      Object.keys(lines).forEach(lineKey => {
+        const line = lines[lineKey];
+
+        // 1. Inbound (+trackGap/2) and Outbound (-trackGap/2) Tracks
+        [-trackGap / 2, trackGap / 2].forEach(offset => {
+          ctx.save();
+          ctx.beginPath();
+          for (let t = 0; t <= 1; t += 0.01) {
+            const pt = getOffsetBezierPoint(line.p0, line.p1, line.p2, line.p3, t, offset);
+            if (t === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.strokeStyle = isEmergency ? '#ff0055' : line.color;
+          ctx.lineWidth = 3;
+          ctx.shadowColor = line.color;
+          ctx.shadowBlur = 8;
+          ctx.stroke();
+          ctx.restore();
+        });
+
+        // 2. DRAW STATIONS
+        line.stations.forEach(st => {
+          const centerPt = getBezierPoint(line.p0, line.p1, line.p2, line.p3, st.t);
+          const isHovered = hoveredStation && hoveredStation.code === st.code;
+          const isSelected = selectedStation && selectedStation.code === st.code;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(centerPt.x, centerPt.y, st.transfer ? 10 : 7, 0, Math.PI * 2);
+          ctx.fillStyle = '#05070d';
+          ctx.fill();
+          ctx.strokeStyle = isHovered || isSelected ? '#ffffff' : line.color;
+          ctx.lineWidth = isHovered || isSelected ? 4 : 2.5;
+          ctx.shadowColor = line.color;
+          ctx.shadowBlur = isHovered || isSelected ? 15 : 6;
+          ctx.stroke();
+
+          if (st.transfer) {
+            ctx.beginPath();
+            ctx.arc(centerPt.x, centerPt.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = varColor('--yellow-glow');
+            ctx.fill();
+          }
+
+          // Station Label
+          ctx.fillStyle = isHovered ? '#ffffff' : '#94a3b8';
+          ctx.font = 'bold 11px Consolas';
+          ctx.fillText(`${st.code} ${st.name}`, centerPt.x + 14, centerPt.y + 4);
+          ctx.restore();
+        });
+      });
+
+      // 3. DRAW MOVING TRAINS
+      trains.forEach(tr => {
+        const line = lines[tr.line];
+        if (!isEmergency) {
+          tr.t += tr.speed * globalSpeedMultiplier;
+          if (tr.t > 1) tr.t = 0;
+          if (tr.t < 0) tr.t = 1;
+        }
+
+        const offset = tr.track === 'inbound' ? trackGap / 2 : -trackGap / 2;
+        const pos = getOffsetBezierPoint(line.p0, line.p1, line.p2, line.p3, tr.t, offset);
+
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        const angle = Math.atan2(pos.tangent.y, pos.tangent.x) + (tr.track === 'outbound' ? Math.PI : 0);
+        ctx.rotate(angle);
+
+        // Train Body
+        ctx.fillStyle = isEmergency ? '#ff0055' : line.color;
+        ctx.shadowColor = line.color;
+        ctx.shadowBlur = 12;
+        ctx.fillRect(-10, -4, 20, 8);
+
+        // Direction Indicator Light
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(8, -2, 4, 4);
+        ctx.restore();
+
+        // Train Label Hovering
+        ctx.save();
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 9px Consolas';
+        ctx.fillText(tr.id, pos.x - 14, pos.y - 12);
+        ctx.restore();
+      });
+
+      updateTelemetryUI();
+      requestAnimationFrame(renderCanvas);
+    }
+    requestAnimationFrame(renderCanvas);
+
+    function varColor(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    // =========================================================
+    // 6. UI TELEMETRY & INTERACTION LOGIC
+    // =========================================================
+    function updateTelemetryUI() {
+      const container = document.getElementById('telemetry-container');
+      const lines = getLineConfigs();
+
+      container.innerHTML = trains.map(tr => {
+        const line = lines[tr.line];
+        const offset = tr.track === 'inbound' ? 6 : -6;
+        const pos = getOffsetBezierPoint(line.p0, line.p1, line.p2, line.p3, tr.t, offset);
+        const speedKm = isEmergency ? 0 : Math.round(Math.abs(tr.speed) * 80000 * globalSpeedMultiplier);
+
+        return `
+          <div class="telemetry-card ${tr.line === 'red' ? 'red-line' : ''}">
+            <div class="telemetry-row">
+              <span style="font-weight:bold; color:${line.color};">${tr.id}</span>
+              <span class="val-highlight">${speedKm} KM/H</span>
+            </div>
+            <div class="telemetry-row" style="color:#94a3b8;">
+              <span>DIR: ${tr.track.toUpperCase()}</span>
+              <span>PAX: ${tr.passengers}</span>
+            </div>
+            <div style="font-size:0.7rem; color:#64748b; margin-top:2px;">
+              POS: [${Math.round(pos.x)}, ${Math.round(pos.y)}]
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // CANVAS HOVER & CLICK DETECTION
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mX = e.clientX - rect.left;
+      const mY = e.clientY - rect.top;
+
+      const lines = getLineConfigs();
+      let found = null;
+
+      Object.keys(lines).forEach(key => {
+        lines[key].stations.forEach(st => {
+          const pt = getBezierPoint(lines[key].p0, lines[key].p1, lines[key].p2, lines[key].p3, st.t);
+          if (Math.hypot(pt.x - mX, pt.y - mY) < 18) {
+            found = { ...st, line: key };
+          }
+        });
+      });
+
+      hoveredStation = found;
+      if (found) renderStationDetails(found);
+    });
+
+    canvas.addEventListener('click', () => {
+      if (hoveredStation) {
+        selectedStation = hoveredStation;
+        renderStationDetails(selectedStation);
+        addLog(`Station selected: ${selectedStation.code} (${selectedStation.name})`, 'info');
+      }
+    });
+
+    function renderStationDetails(st) {
+      const detailContainer = document.getElementById('station-detail-content');
+      detailContainer.innerHTML = `
+        <div class="detail-box" style="border-color: var(--cyan-glow);">
+          <div style="font-size: 1.1rem; font-weight: bold; color: var(--yellow-glow);">${st.code} - ${st.name}</div>
+          <div style="color: #94a3b8; font-size: 0.75rem; margin-top: 2px;">
+            LINE: ${st.line.toUpperCase()} LINE | TYPE: ${st.transfer ? 'TRANSFER HUB' : 'REGULAR STATION'}
+          </div>
+        </div>
+        <div class="detail-box">
+          <div class="telemetry-row">
+            <span>PLATFORM DENSITY:</span>
+            <span class="val-highlight">${st.density} (${st.densityVal}%)</span>
+          </div>
+          <div class="telemetry-row" style="margin-top: 6px;">
+            <span>NEXT ARRIVAL:</span>
+            <span style="color: var(--cyan-glow); font-weight: bold;">01 MIN 24 SEC</span>
+          </div>
+        </div>
+        <div class="detail-box">
+          <div style="font-size: 0.75rem; color: #94a3b8;">AUTOMATED SIGNAL STATUS</div>
+          <div style="color: #22c55e; font-weight: bold; margin-top: 4px;">✔ ATO INTERLOCKING CLEAR</div>
+        </div>
+      `;
+    }
+
+    // =========================================================
+    // 7. CONTROLS & WEB AUDIO EMERGENCY ALARM
+    // =========================================================
+    document.getElementById('speed-slider').addEventListener('input', (e) => {
+      globalSpeedMultiplier = parseFloat(e.target.value);
+    });
+
+    function dispatchTrain() {
+      const lines = ['red', 'blue'];
+      const chosenLine = lines[Math.floor(Math.random() * lines.length)];
+      const id = `TX-${Math.floor(100 + Math.random() * 900)}`;
+
+      trains.push({
+        id: id,
+        line: chosenLine,
+        track: Math.random() > 0.5 ? 'inbound' : 'outbound',
+        t: 0.05,
+        speed: 0.0008,
+        passengers: 120,
+        status: 'DISPATCHED'
+      });
+
+      addLog(`Extra train [${id}] dispatched on ${chosenLine.toUpperCase()} line.`, 'info');
+    }
+
+    // WEB AUDIO API EMERGENCY ALARM SYNTHESIZER
+    let audioCtx = null;
+    let alarmOsc = null;
+    let alarmInterval = null;
+
+    function triggerAlarmAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (alarmOsc) return;
+
+      alarmOsc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      alarmOsc.type = 'sawtooth';
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+      alarmOsc.connect(gain);
+      gain.connect(audioCtx.destination);
+      alarmOsc.start();
+
+      let high = false;
+      alarmInterval = setInterval(() => {
+        if (alarmOsc) {
+          alarmOsc.frequency.setValueAtTime(high ? 950 : 600, audioCtx.currentTime);
+          high = !high;
+        }
+      }, 200);
+    }
+
+    function stopAlarmAudio() {
+      if (alarmInterval) clearInterval(alarmInterval);
+      if (alarmOsc) {
+        alarmOsc.stop();
+        alarmOsc.disconnect();
+        alarmOsc = null;
+      }
+    }
+
+    function toggleEmergencyStop() {
+      isEmergency = !isEmergency;
+      if (isEmergency) {
+        document.body.classList.add('emergency-active');
+        document.getElementById('status-text').innerText = 'DEFCON-1 LOCKDOWN';
+        document.getElementById('status-text').style.color = 'var(--red-glow)';
+        document.getElementById('sys-status-dot').style.background = 'var(--red-glow)';
+        addLog('🚨 DEFCON-1 EMERGENCY STOP TRIGGERED! ALL TRAINS HALTED.', 'alert');
+        triggerAlarmAudio();
+      } else {
+        document.body.classList.remove('emergency-active');
+        document.getElementById('status-text').innerText = 'OPTIMAL';
+        document.getElementById('status-text').style.color = 'var(--cyan-glow)';
+        document.getElementById('sys-status-dot').style.background = 'var(--cyan-glow)';
+        addLog('Emergency state cleared. ATO Automatic operation resumed.', 'info');
+        stopAlarmAudio();
+      }
+    }
+  </script>
+</body>
+</html>
